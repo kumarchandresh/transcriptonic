@@ -52,6 +52,14 @@ let transcriptDisplayContent = null
 let isTranscriptDisplayVisible = false
 let _updateRaf = null
 
+// Efficient rendering state management
+let lastRenderedTranscriptLength = 0
+let liveMessageElement = null
+let lastLiveUpdateTime = 0
+let liveUpdateDebounceId = null
+const LIVE_UPDATE_DEBOUNCE_MS = 300  // Update every 300ms max
+const LIVE_UPDATE_MIN_INTERVAL_MS = 100  // Minimum interval between updates
+
 // Storage debouncing variables
 let _saveKeys = new Set()
 let _saveSendDownload = false
@@ -438,10 +446,20 @@ function transcriptMutationCallback(mutationsList) {
         else {
           // No transcript yet or the last person stopped speaking(and no one has started speaking next)
           console.log("No active transcript - no people found in DOM")
-          // Push data in the buffer variables to the transcript array, but avoid pushing blank ones.
+          
+          // Force final update of live bubble before clearing buffers
           if ((personNameBuffer !== "") && (transcriptTextBuffer !== "")) {
+            // Cancel any pending debounced updates and force immediate update
+            if (liveUpdateDebounceId) {
+              clearTimeout(liveUpdateDebounceId)
+              liveUpdateDebounceId = null
+            }
+            updateLiveElementNow() // Capture final words
+            
+            // Push data in the buffer variables to the transcript array
             pushBufferToTranscript()
           }
+          
           // Update buffers for the next person in the next mutation
           personNameBuffer = ""
           transcriptTextBuffer = ""
@@ -665,6 +683,15 @@ function pushBufferToTranscript() {
 // Creates and shows the real-time transcript display window
 function createRealtimeTranscriptDisplay() {
   if (transcriptDisplayContainer) return
+
+  // Reset rendering state for fresh start
+  lastRenderedTranscriptLength = 0
+  liveMessageElement = null
+  lastLiveUpdateTime = 0
+  if (liveUpdateDebounceId) {
+    clearTimeout(liveUpdateDebounceId)
+    liveUpdateDebounceId = null
+  }
 
   // Create the main container
   transcriptDisplayContainer = document.createElement('div')
@@ -1356,227 +1383,225 @@ function createRealtimeTranscriptDisplay() {
 
 // Updates the real-time transcript display with current transcript data
 function updateRealtimeTranscriptDisplay() {
-  console.log('updateRealtimeTranscriptDisplay called')
-  console.log('transcriptDisplayContainer:', !!transcriptDisplayContainer)
-  console.log('transcriptDisplayContent:', !!transcriptDisplayContent)
-
   if (!transcriptDisplayContainer || !transcriptDisplayContent) {
-    console.log('Missing display containers, returning early')
     return
   }
 
-  console.log('=== Updating transcript display ===')
-  console.log('Current transcript length:', transcript.length)
-
   // Update count in header
+  updateHeaderMessageCount()
+
+  // Handle empty state
+  if (transcript.length === 0 && transcriptTextBuffer === '') {
+    if (!transcriptDisplayContent.querySelector('.transcriptonic-empty')) {
+      transcriptDisplayContent.innerHTML = '<div class="transcriptonic-empty">Waiting for meeting transcript...</div>'
+    }
+    return
+  }
+
+  // Remove empty state if it exists
+  const emptyState = transcriptDisplayContent.querySelector('.transcriptonic-empty')
+  if (emptyState) {
+    emptyState.remove()
+  }
+
+  // Add any new completed messages (append-only, never re-render existing)
+  addNewCompletedMessages()
+
+  // Update or create the live speaking bubble (debounced)
+  updateLiveSpeakingBubble()
+
+  // Auto-scroll only if user isn't interacting
+  autoScrollIfNeeded()
+}
+
+function updateHeaderMessageCount() {
   const countElement = transcriptDisplayContainer.querySelector('.transcriptonic-count')
   if (countElement) {
     const messageCount = transcript.length + (transcriptTextBuffer ? 1 : 0)
     countElement.textContent = `${messageCount} message${messageCount !== 1 ? 's' : ''}`
   }
+}
 
-  // Store existing dynamic bubbles before clearing (temporarily disabled for debugging)
-  const existingBubbles = new Map()
-  // const dynamicBubbles = transcriptDisplayContent.querySelectorAll('.dynamic-bubble')
-  // console.log('Found', dynamicBubbles.length, 'dynamic bubbles to preserve')
+function addNewCompletedMessages() {
+  // Only add messages that haven't been rendered yet
+  const newMessageCount = transcript.length - lastRenderedTranscriptLength
+  
+  if (newMessageCount > 0) {
+    console.log(`Adding ${newMessageCount} new completed messages`)
+    
+    for (let i = lastRenderedTranscriptLength; i < transcript.length; i++) {
+      const block = transcript[i]
+      const blockElement = createCompletedMessageElement(block, i)
+      
+      // Insert before live message if it exists, otherwise append
+      if (liveMessageElement) {
+        transcriptDisplayContent.insertBefore(blockElement, liveMessageElement)
+      } else {
+        transcriptDisplayContent.appendChild(blockElement)
+      }
+    }
+    
+    lastRenderedTranscriptLength = transcript.length
+  }
+}
 
-  // Clear content
-  transcriptDisplayContent.innerHTML = ''
+function createCompletedMessageElement(block, index) {
+  const blockElement = document.createElement('div')
+  blockElement.className = 'transcriptonic-block'
+  blockElement.setAttribute('data-block-index', index.toString())
+  blockElement.style.animationDelay = `${index * 0.1}s`
 
-  console.log('Transcript length:', transcript.length, 'Buffer:', transcriptTextBuffer)
+  const timestamp = new Date(block.timestamp)
+  const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const speakerTitle = block.personName === userName ? 'You' : 'Participant'
 
-  if (transcript.length === 0 && transcriptTextBuffer === '') {
-    transcriptDisplayContent.innerHTML = '<div class="transcriptonic-empty">Waiting for meeting transcript...</div>'
+  blockElement.innerHTML = `
+    <div class="transcriptonic-speaker">
+      <div class="transcriptonic-speaker-info">
+        <div class="transcriptonic-speaker-indicator"></div>
+        <span>${block.personName}</span>
+        <span class="transcriptonic-speaker-title">${speakerTitle}</span>
+      </div>
+      <span class="transcriptonic-time">${timeString}</span>
+    </div>
+    <div class="transcriptonic-text">
+      ${block.transcriptText}
+      <div class="transcriptonic-floating-actions">
+        <div class="transcriptonic-action-btn" data-action="ai" data-index="${index}" title="AI Analysis">
+          <svg viewBox="0 0 24 24">
+            <path d="M12 2L2 7v10c0 5.55 3.84 10 9 11 5.16-1 9-5.45 9-11V7l-10-5z"/>
+            <path d="M8 11l2 2 4-4"/>
+          </svg>
+        </div>
+        <div class="transcriptonic-action-btn" data-action="edit" data-index="${index}" title="Edit Message">
+          <svg viewBox="0 0 24 24">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3l-9.5 9.5-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </div>
+        <div class="transcriptonic-action-btn" data-action="note" data-index="${index}" title="Add Note">
+          <svg viewBox="0 0 24 24">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <path d="M14 2v6h6"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+            <path d="M10 9H8"/>
+          </svg>
+        </div>
+        <div class="transcriptonic-action-btn" data-action="tag" data-index="${index}" title="Add Tag">
+          <svg viewBox="0 0 24 24">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 14V2h12v8.59a2 2 0 0 1 .59 1.41z"/>
+            <path d="M7 7h.01"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+  `
+
+  // Add event listeners for action buttons
+  const actionButtons = blockElement.querySelectorAll('.transcriptonic-action-btn')
+  actionButtons.forEach((button) => {
+    button.addEventListener('click', function(e) {
+      e.stopPropagation()
+      const action = this.getAttribute('data-action')
+      const index = parseInt(this.getAttribute('data-index'))
+
+      // Visual feedback
+      this.style.background = 'rgba(45, 45, 45, 0.1)'
+      this.style.color = '#2d2d2d'
+      setTimeout(() => {
+        this.style.background = ''
+        this.style.color = ''
+      }, 200)
+
+      handleActionClick(action, index)
+    })
+  })
+
+  return blockElement
+}
+
+function updateLiveSpeakingBubble() {
+  // If no buffer, remove live element immediately
+  if (!transcriptTextBuffer || !personNameBuffer) {
+    if (liveMessageElement) {
+      liveMessageElement.remove()
+      liveMessageElement = null
+      lastLiveUpdateTime = 0
+    }
     return
   }
 
-  // Add completed transcript blocks
-  transcript.forEach((block, index) => {
-    const blockElement = document.createElement('div')
-    blockElement.className = 'transcriptonic-block'
-    blockElement.setAttribute('data-block-index', index.toString())
-    blockElement.style.animationDelay = `${index * 0.1}s`
-
-    const timestamp = new Date(block.timestamp)
-    const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-
-    // Determine speaker title/role (you can enhance this logic)
-    const speakerTitle = block.personName === userName ? 'You' : 'Participant'
-
-    const htmlContent = `
-      <div class="transcriptonic-speaker">
-        <div class="transcriptonic-speaker-info">
-          <div class="transcriptonic-speaker-indicator"></div>
-          <span>${block.personName}</span>
-          <span class="transcriptonic-speaker-title">${speakerTitle}</span>
-        </div>
-        <span class="transcriptonic-time">${timeString}</span>
-      </div>
-      <div class="transcriptonic-text">
-        ${block.transcriptText}
-        <!-- Floating action menu that appears on hover -->
-        <div class="transcriptonic-floating-actions">
-          <div class="transcriptonic-action-btn" data-action="ai" data-index="${index}" title="AI Analysis">
-            <svg viewBox="0 0 24 24">
-              <path d="M12 2L2 7v10c0 5.55 3.84 10 9 11 5.16-1 9-5.45 9-11V7l-10-5z"/>
-              <path d="M8 11l2 2 4-4"/>
-            </svg>
-          </div>
-          <div class="transcriptonic-action-btn" data-action="edit" data-index="${index}" title="Edit Message">
-            <svg viewBox="0 0 24 24">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-              <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3l-9.5 9.5-4 1 1-4 9.5-9.5z"/>
-            </svg>
-          </div>
-          <div class="transcriptonic-action-btn" data-action="note" data-index="${index}" title="Add Note">
-            <svg viewBox="0 0 24 24">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <path d="M14 2v6h6"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-              <path d="M10 9H8"/>
-            </svg>
-          </div>
-          <div class="transcriptonic-action-btn" data-action="tag" data-index="${index}" title="Add Tag">
-            <svg viewBox="0 0 24 24">
-              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 14V2h12v8.59a2 2 0 0 1 .59 1.41z"/>
-              <path d="M7 7h.01"/>
-            </svg>
-          </div>
-        </div>
-      </div>
-    `
-
-    console.log('Setting innerHTML for block:', index, htmlContent)
-    blockElement.innerHTML = htmlContent
-
-    // Add event listeners for action buttons
-    const actionButtons = blockElement.querySelectorAll('.transcriptonic-action-btn')
-    console.log(`Found ${actionButtons.length} action buttons for block ${index}`)
-    console.log('Action buttons:', actionButtons)
-
-    // Also check if the actions container exists
-    const actionsContainer = blockElement.querySelector('.transcriptonic-actions')
-    console.log('Actions container:', actionsContainer)
-
-    actionButtons.forEach((button, btnIndex) => {
-      console.log(`Setting up button ${btnIndex}:`, button)
-      button.addEventListener('click', function(e) {
-        e.stopPropagation()
-        const action = this.getAttribute('data-action')
-        const index = parseInt(this.getAttribute('data-index'))
-        console.log(`Action clicked: ${action} for index ${index}`)
-
-        // Add visual feedback like in the demo
-        this.style.background = 'rgba(45, 45, 45, 0.1)'
-        this.style.color = '#2d2d2d'
-        setTimeout(() => {
-          this.style.background = ''
-          this.style.color = ''
-        }, 200)
-
-        handleActionClick(action, index)
-      })
-    })
-
-    transcriptDisplayContent.appendChild(blockElement)
-
-
-
-    // Restore dynamic bubble if it existed for this block (temporarily disabled for debugging)
-    if (false && existingBubbles.has(index)) {
-      console.log('Restoring bubble for block index:', index)
-      const bubbleData = existingBubbles.get(index)
-
-      // Create new bubble element
-      const restoredBubble = document.createElement('div')
-      restoredBubble.className = 'dynamic-bubble'
-      restoredBubble.innerHTML = bubbleData.html
-      restoredBubble.style.animation = 'none'
-
-      // Apply saved styles
-      if (bubbleData.style.background) {
-        restoredBubble.style.background = bubbleData.style.background
-      }
-      if (bubbleData.style.borderColor) {
-        restoredBubble.style.borderColor = bubbleData.style.borderColor
-      }
-
-      // Restore textarea value if it exists
-      const textarea = restoredBubble.querySelector('textarea')
-      if (textarea && bubbleData.textareaValue) {
-        textarea.value = bubbleData.textareaValue
-        console.log('Restored textarea value:', bubbleData.textareaValue)
-      }
-
-      // Re-attach event listeners
-      const cancelBtn = restoredBubble.querySelector('.cancel-btn')
-      const saveBtn = restoredBubble.querySelector('.save-btn')
-
-      if (cancelBtn) {
-        cancelBtn.addEventListener('click', () => removeDynamicBubble(restoredBubble))
-      }
-
-      if (saveBtn) {
-        saveBtn.addEventListener('click', () => {
-          if (bubbleData.type === 'Edit') {
-            saveEdit(restoredBubble, blockElement)
-          } else if (bubbleData.type === 'Note') {
-            saveNote(restoredBubble, blockElement)
-          } else {
-            saveResponse(restoredBubble, blockElement)
-          }
-        })
-      }
-
-      // Insert the restored bubble after the block
-      transcriptDisplayContent.insertBefore(restoredBubble, blockElement.nextSibling)
-
-      // Focus on textarea if it exists and has content
-      if (textarea && bubbleData.textareaValue) {
-        setTimeout(() => {
-          textarea.focus()
-          // Set cursor to end of text
-          textarea.setSelectionRange(textarea.value.length, textarea.value.length)
-        }, 100)
-      }
-
-      console.log('Bubble restored successfully')
-    }
-  })
-
-  // Add current buffer if it exists
-  if (transcriptTextBuffer && personNameBuffer) {
-    const currentBlock = document.createElement('div')
-    currentBlock.className = 'transcriptonic-block transcriptonic-current'
-
-    const timestamp = new Date(timestampBuffer || new Date().toISOString())
-    const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-
-    const speakerName = personNameBuffer === "You" ? userName : personNameBuffer
-    const speakerTitle = personNameBuffer === "You" ? 'You' : 'Speaking'
-
-    currentBlock.innerHTML = `
-      <div class="transcriptonic-speaker">
-        <div class="transcriptonic-speaker-info">
-          <div class="transcriptonic-speaker-indicator"></div>
-          <span>${speakerName}</span>
-          <span class="transcriptonic-speaker-title">${speakerTitle}</span>
-          <div class="transcriptonic-typing-indicator">
-            <div class="transcriptonic-typing-dot"></div>
-            <div class="transcriptonic-typing-dot"></div>
-            <div class="transcriptonic-typing-dot"></div>
-          </div>
-        </div>
-        <span class="transcriptonic-time">${timeString}</span>
-      </div>
-      <div class="transcriptonic-text">${transcriptTextBuffer}</div>
-    `
-
-    transcriptDisplayContent.appendChild(currentBlock)
+  const currentTime = Date.now()
+  
+  // Always update if there's no live element yet
+  if (!liveMessageElement) {
+    updateLiveElementNow()
+    lastLiveUpdateTime = currentTime
+    return
   }
 
-  // Auto-scroll to bottom only if no dynamic bubbles are active
+  // Check if enough time has passed since last update
+  const timeSinceLastUpdate = currentTime - lastLiveUpdateTime
+  
+  if (timeSinceLastUpdate >= LIVE_UPDATE_MIN_INTERVAL_MS) {
+    // Clear any pending debounced update
+    if (liveUpdateDebounceId) {
+      clearTimeout(liveUpdateDebounceId)
+      liveUpdateDebounceId = null
+    }
+    
+    // Update immediately
+    updateLiveElementNow()
+    lastLiveUpdateTime = currentTime
+  } else {
+    // Schedule a debounced update if not already scheduled
+    if (!liveUpdateDebounceId) {
+      const remainingTime = LIVE_UPDATE_MIN_INTERVAL_MS - timeSinceLastUpdate
+      liveUpdateDebounceId = setTimeout(() => {
+        updateLiveElementNow()
+        lastLiveUpdateTime = Date.now()
+        liveUpdateDebounceId = null
+      }, remainingTime)
+    }
+  }
+}
+
+function updateLiveElementNow() {
+  const timestamp = new Date(timestampBuffer || new Date().toISOString())
+  const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const speakerName = personNameBuffer === "You" ? userName : personNameBuffer
+  const speakerTitle = personNameBuffer === "You" ? 'You' : 'Speaking'
+
+  const liveHTML = `
+    <div class="transcriptonic-speaker">
+      <div class="transcriptonic-speaker-info">
+        <div class="transcriptonic-speaker-indicator"></div>
+        <span>${speakerName}</span>
+        <span class="transcriptonic-speaker-title">${speakerTitle}</span>
+        <div class="transcriptonic-typing-indicator">
+          <div class="transcriptonic-typing-dot"></div>
+          <div class="transcriptonic-typing-dot"></div>
+          <div class="transcriptonic-typing-dot"></div>
+        </div>
+      </div>
+      <span class="transcriptonic-time">${timeString}</span>
+    </div>
+    <div class="transcriptonic-text">${transcriptTextBuffer}</div>
+  `
+
+  if (!liveMessageElement) {
+    // Create new live element
+    liveMessageElement = document.createElement('div')
+    liveMessageElement.className = 'transcriptonic-block transcriptonic-current'
+    transcriptDisplayContent.appendChild(liveMessageElement)
+  }
+
+  liveMessageElement.innerHTML = liveHTML
+}
+
+function autoScrollIfNeeded() {
+  // Don't auto-scroll if user is actively interacting with dynamic bubbles
   const activeBubbles = transcriptDisplayContent.querySelectorAll('.dynamic-bubble')
   const hasActiveInput = Array.from(activeBubbles).some(bubble => {
     const textarea = bubble.querySelector('textarea')
@@ -1611,8 +1636,21 @@ function hideRealtimeTranscriptDisplay() {
     transcriptDisplayContainer = null
     transcriptDisplayContent = null
     isTranscriptDisplayVisible = false
-  if (monitorIntervalId) { clearInterval(monitorIntervalId); monitorIntervalId = null }
-}
+    
+    // Reset rendering state
+    lastRenderedTranscriptLength = 0
+    liveMessageElement = null
+    lastLiveUpdateTime = 0
+    if (liveUpdateDebounceId) {
+      clearTimeout(liveUpdateDebounceId)
+      liveUpdateDebounceId = null
+    }
+    
+    if (monitorIntervalId) { 
+      clearInterval(monitorIntervalId) 
+      monitorIntervalId = null 
+    }
+  }
 }
 
 // Shows the real-time transcript display
