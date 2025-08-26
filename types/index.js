@@ -3,6 +3,8 @@
  * @property {string} personName name of the person who spoke
  * @property {string} timestamp ISO timestamp of when the words were spoken
  * @property {string} transcriptText actual transcript text
+ * @property {string[]} [tags] optional array of tags for this transcript block
+ * @property {string[]} [notes] optional array of notes for this transcript block
  */
 
 /**

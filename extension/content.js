@@ -299,7 +299,10 @@ function meetingRoutines(uiType) {
         } catch (err) {
           console.error(err)
           isChatMessagesDomErrorCaptured = true
-          showNotification(extensionStatusJSON_bug)
+          showNotification({ 
+            status: 400, 
+            message: "<strong>TranscripTonic encountered an error</strong> <br /> Please check the console for details" 
+          })
 
           logError("002", err)
         }
@@ -307,7 +310,10 @@ function meetingRoutines(uiType) {
     } catch (err) {
       console.error(err)
       isChatMessagesDomErrorCaptured = true
-      showNotification(extensionStatusJSON_bug)
+      showNotification({ 
+        status: 400, 
+        message: "<strong>TranscripTonic encountered an error</strong> <br /> Please check the console for details" 
+      })
 
       logError("003", err)
     }
@@ -356,7 +362,10 @@ function meetingRoutines(uiType) {
       })
     } catch (err) {
       console.error(err)
-      showNotification(extensionStatusJSON_bug)
+      showNotification({ 
+        status: 400, 
+        message: "<strong>TranscripTonic encountered an error</strong> <br /> Please check the console for details" 
+      })
 
       logError("004", err)
     }
@@ -492,7 +501,10 @@ function transcriptMutationCallback(mutationsList) {
       console.error(err)
       if (!isTranscriptDomErrorCaptured && !hasMeetingEnded) {
         console.log(reportErrorMessage)
-        showNotification(extensionStatusJSON_bug)
+        showNotification({ 
+          status: 400, 
+          message: "<strong>TranscripTonic encountered an error</strong> <br /> Please check the console for details" 
+        })
 
         logError("005", err)
       }
@@ -588,7 +600,10 @@ function chatMessagesMutationCallback(mutationsList) {
       console.error(err)
       if (!isChatMessagesDomErrorCaptured && !hasMeetingEnded) {
         console.log(reportErrorMessage)
-        showNotification(extensionStatusJSON_bug)
+        showNotification({ 
+          status: 400, 
+          message: "<strong>TranscripTonic encountered an error</strong> <br /> Please check the console for details" 
+        })
 
         logError("006", err)
       }
@@ -1340,12 +1355,16 @@ function createRealtimeTranscriptDisplay() {
   let isDragging = false
   let dragOffset = { x: 0, y: 0 }
 
-  header.addEventListener('mousedown', function(e) {
-    isDragging = true
-    dragOffset.x = e.clientX - transcriptDisplayContainer.offsetLeft
-    dragOffset.y = e.clientY - transcriptDisplayContainer.offsetTop
-    header.style.cursor = 'grabbing'
-  })
+  if (header) {
+    header.addEventListener('mousedown', function(e) {
+      const mouseEvent = /** @type {MouseEvent} */ (e)
+      isDragging = true
+      dragOffset.x = mouseEvent.clientX - transcriptDisplayContainer.offsetLeft
+      dragOffset.y = mouseEvent.clientY - transcriptDisplayContainer.offsetTop
+      const headerElement = /** @type {HTMLElement} */ (header)
+      headerElement.style.cursor = 'grabbing'
+    })
+  }
 
   document.addEventListener('mousemove', function(e) {
     if (isDragging) {
@@ -1357,10 +1376,16 @@ function createRealtimeTranscriptDisplay() {
 
   document.addEventListener('mouseup', function() {
     isDragging = false
-    header.style.cursor = 'grab'
+    if (header) {
+      const headerElement = /** @type {HTMLElement} */ (header)
+      headerElement.style.cursor = 'grab'
+    }
   })
 
-  header.style.cursor = 'grab'
+  if (header) {
+    const headerElement = /** @type {HTMLElement} */ (header)
+    headerElement.style.cursor = 'grab'
+  }
 
   // Add to page
   document.body.appendChild(transcriptDisplayContainer)
@@ -2041,6 +2066,7 @@ window.addTestTranscriptBlock = addTestTranscriptBlock
 window.addTestUserResponse = addTestUserResponse
 
 // Debug function to check transcript structure
+// @ts-ignore - Adding debug function to window
 window.debugTranscript = function() {
   console.log('=== TRANSCRIPT DEBUG ===')
   console.log('Transcript length:', transcript.length)
@@ -2063,6 +2089,7 @@ window.debugTranscript = function() {
 }
 
 // Function to fix all transcript entries to have proper structure
+// @ts-ignore - Adding debug function to window
 window.fixTranscriptStructure = function() {
   console.log('=== FIXING TRANSCRIPT STRUCTURE ===')
   let fixed = 0
