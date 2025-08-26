@@ -484,10 +484,9 @@ function transcriptMutationCallback(mutationsList) {
       // Update real-time transcript display
       updateRealtimeTranscriptDisplay()
 
-      // Track user speech for test user responses and chat update timing
+      // Update chat timing when user is speaking  
       if (personNameBuffer === "You" || personNameBuffer === userName) {
-        lastUserSpeechTime = Date.now()
-        lastChatUpdateTime = Date.now() // Update chat timing when user is speaking
+        lastChatUpdateTime = Date.now()
       }
 
       // Logs to indicate that the extension is working
@@ -690,9 +689,6 @@ function pushBufferToTranscript() {
 
   overWriteChromeStorageDebounced(["transcript"], false)
   updateRealtimeTranscriptDisplay()
-
-  // Monitor for test user response opportunity
-  setTimeout(monitorUserSpeech, 100)
 }
 
 // Creates and shows the real-time transcript display window
@@ -1394,16 +1390,7 @@ function createRealtimeTranscriptDisplay() {
   // Initial update
   updateRealtimeTranscriptDisplay()
 
-  // Show a brief notification
   console.log("TranscripTonic: Corporate-style meeting transcript display created. Use Ctrl/Cmd+Shift+T to toggle.")
-
-  // Add test user immediately
-  setTimeout(() => {
-    addTestTranscriptBlock()
-  }, 1000)
-
-  // Start periodic monitoring for test user responses
-  monitorIntervalId = monitorIntervalId || setInterval(monitorUserSpeech, 1000)
 }
 
 // Updates the real-time transcript display with current transcript data
@@ -1682,79 +1669,6 @@ function hideRealtimeTranscriptDisplay() {
 function showRealtimeTranscriptDisplay() {
   if (!isTranscriptDisplayVisible) {
     createRealtimeTranscriptDisplay()
-  }
-}
-
-// Test user responses
-const testUserResponses = [
-  "Ok, I got your point",
-  "That makes sense to me",
-  "I understand what you're saying",
-  "Good point, thanks for clarifying",
-  "I see what you mean",
-  "That's a great observation",
-  "I agree with that approach",
-  "Thanks for the explanation",
-  "That sounds reasonable",
-  "I'm following your logic"
-]
-
-let lastUserSpeechTime = 0
-let testUserResponseTimer = null
-
-// Test function to add a sample transcript block
-function addTestTranscriptBlock() {
-  console.log('Adding test transcript block...')
-  console.log('Current transcript before adding:', transcript)
-
-  transcript.push({
-    "personName": "Alex Chen",
-    "timestamp": new Date().toISOString(),
-    "transcriptText": "Hi everyone! I'm here to help test the transcript system. Feel free to speak and I'll respond.",
-    "tags": [],
-    "notes": []
-  })
-
-  console.log('Current transcript after adding:', transcript)
-  console.log('Calling updateRealtimeTranscriptDisplay...')
-  updateRealtimeTranscriptDisplay()
-  overWriteChromeStorage(["transcript"], false)
-  console.log('Test block added, transcript length:', transcript.length)
-}
-
-// Function to add test user response
-function addTestUserResponse() {
-  const randomResponse = testUserResponses[Math.floor(Math.random() * testUserResponses.length)]
-
-  transcript.push({
-    "personName": "Alex Chen",
-    "timestamp": new Date().toISOString(),
-    "transcriptText": randomResponse
-  })
-
-  updateRealtimeTranscriptDisplay()
-  overWriteChromeStorageDebounced(["transcript"], false)
-  console.log('Test user responded:', randomResponse)
-}
-
-// Monitor for user speech completion
-function monitorUserSpeech() {
-  const currentTime = Date.now()
-
-  // If user was speaking and now stopped (no buffer updates for 3 seconds)
-  if (lastUserSpeechTime > 0 && (currentTime - lastUserSpeechTime) > 3000) {
-    lastUserSpeechTime = 0
-
-    // Clear any existing timer
-    if (testUserResponseTimer) {
-      clearTimeout(testUserResponseTimer)
-    }
-
-    // Add test user response after 2-4 seconds delay
-    const delay = 2000 + Math.random() * 2000
-    testUserResponseTimer = setTimeout(() => {
-      addTestUserResponse()
-    }, delay)
   }
 }
 
@@ -2060,10 +1974,6 @@ function saveResponse(bubble, parentBlock) {
     removeDynamicBubble(bubble)
   }
 }
-
-// Make test function available globally for debugging
-window.addTestTranscriptBlock = addTestTranscriptBlock
-window.addTestUserResponse = addTestUserResponse
 
 // Debug function to check transcript structure
 // @ts-ignore - Adding debug function to window
