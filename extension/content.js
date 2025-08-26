@@ -173,18 +173,76 @@ function meetingRoutines(uiType) {
       break
   }
 
-  // CRITICAL DOM DEPENDENCY. Wait until the meeting end icon appears, used to detect meeting start
-  waitForElement(meetingEndIconData.selector, meetingEndIconData.text).then(() => {
-    console.log("Meeting started")
-    /** @type {ExtensionMessage} */
-    const message = {
-      type: "new_meeting_started"
+  // Use MutationObserver to detect when meeting UI is ready
+  const meetingObserver = new MutationObserver((mutations) => {
+    if (hasMeetingStarted) return
+    
+    // Check if meeting UI elements are present
+    if (checkForMeetingStart()) {
+      console.log("Meeting started")
+      hasMeetingStarted = true
+      meetingObserver.disconnect()
+      
+      // Send message to background script
+      /** @type {ExtensionMessage} */
+      const message = {
+        type: "new_meeting_started"
+      }
+      chrome.runtime.sendMessage(message, function () { })
+      
+      // Initialize meeting functionality
+      initializeMeetingFunctionality()
     }
-    chrome.runtime.sendMessage(message, function () { })
-    hasMeetingStarted = true
+  })
+  
+  // Start observing the document for changes
+  meetingObserver.observe(document.body, {
+    childList: true,
+    subtree: true
+  })
+  
+  // Also check immediately in case meeting UI is already present
+  setTimeout(() => {
+    if (!hasMeetingStarted && checkForMeetingStart()) {
+      console.log("Meeting started")
+      hasMeetingStarted = true
+      meetingObserver.disconnect()
+      
+      /** @type {ExtensionMessage} */
+      const message = {
+        type: "new_meeting_started"
+      }
+      chrome.runtime.sendMessage(message, function () { })
+      
+      initializeMeetingFunctionality()
+    }
+  }, 1000)
+}
 
+/**
+ * Check if meeting UI indicators are present
+ */
+function checkForMeetingStart() {
+  const leaveButton = document.querySelector('[aria-label="Leave call"]')
+  return !!leaveButton
+}
 
-      //*********** MEETING START ROUTINES **********//
+/**
+ * Initialize all meeting functionality
+ */
+function initializeMeetingFunctionality() {
+  // Define selectors for this meeting instance
+  const captionsIconData = {
+    selector: ".google-symbols",
+    text: "closed_caption_off"
+  }
+  
+  const meetingEndIconData = {
+    selector: '[aria-label="Leave call"]',
+    text: ""
+  }
+
+  //*********** MEETING START ROUTINES **********//
       // Pick up meeting name after a delay, since Google meet updates meeting name after a delay
       setTimeout(() => updateMeetingTitle(), 5000)
 
@@ -369,7 +427,6 @@ function meetingRoutines(uiType) {
 
       logError("004", err)
     }
-  })
 }
 
 
