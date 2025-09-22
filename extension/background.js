@@ -95,14 +95,18 @@ chrome.runtime.onMessage.addListener(function (messageUnTyped, sender, sendRespo
     }
 
     if (message.type === "recover_last_meeting") {
-        recoverLastMeeting().then((message) => {
-            /** @type {ExtensionResponse} */
-            const response = { success: true, message: message }
-            sendResponse(response)
+        recoverLastMeeting().then((statusResponse) => {
+            // Return the status response directly for new format
+            sendResponse(statusResponse)
         })
             .catch((error) => {
+                // Only actual errors end up here now
+                console.error("Recovery error in background:", error)
                 /** @type {ExtensionResponse} */
-                const response = { success: false, message: error }
+                const response = { 
+                    success: false, 
+                    message: error?.message || error?.toString() || "Unknown recovery error" 
+                }
                 sendResponse(response)
             })
     }
@@ -237,16 +241,25 @@ function pickupLastMeetingFromStorage() {
                         // Save updated recent transcripts
                         chrome.storage.local.set({ meetings: meetings }, function () {
                             console.log("Last meeting picked up")
-                            resolve("Last meeting picked up")
+                            resolve({
+                                status: "INFO",
+                                message: "Last meeting picked up"
+                            })
                         })
                     })
                 }
                 else {
-                    reject("Empty transcript and empty chatMessages")
+                    resolve({
+                        status: "INFO", 
+                        message: "Empty transcript and empty chatMessages"
+                    })
                 }
             }
             else {
-                reject("No meetings found. May be attend one?")
+                resolve({
+                    status: "INFO",
+                    message: "No meetings found. May be attend one?"
+                })
             }
         })
     })
@@ -514,18 +527,27 @@ function recoverLastMeeting() {
                 // Last meeting was not processed for some reason. Need to recover that data, process and download it.
                 if ((!lastSavedMeeting) || (resultLocal.meetingStartTimestamp !== lastSavedMeeting.meetingStartTimestamp)) {
                     processLastMeeting().then(() => {
-                        resolve("Recovered last meeting to the best possible extent")
+                        resolve({
+                            status: "INFO",
+                            message: "Recovered last meeting to the best possible extent"
+                        })
                     }).catch((error) => {
                         // Fails if transcript is empty or webhook request fails or user never attended any meetings
                         reject(error)
                     })
                 }
                 else {
-                    resolve("No recovery needed")
+                    resolve({
+                        status: "INFO",
+                        message: "No recovery needed"
+                    })
                 }
             }
             else {
-                reject("No meetings found. May be attend one?")
+                resolve({
+                    status: "INFO",
+                    message: "No meetings found. May be attend one?"
+                })
             }
         })
     })

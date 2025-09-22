@@ -1,4 +1,3 @@
-// @ts-check
 /// <reference path="../types/chrome.d.ts" />
 /// <reference path="../types/index.js" />
 
@@ -76,7 +75,11 @@ const CONSOLIDATION_DELAY = 2000 // 2 seconds
 // Consolidation timer
 let consolidationTimer = null
 
-
+// Global observer variables for hybrid approach
+/** @type {MutationObserver|null} */
+let transcriptObserver = null
+/** @type {MutationObserver|null} */
+let chatMessagesObserver = null
 
 let canUseAriaBasedTranscriptSelector = true
 
@@ -92,8 +95,27 @@ Promise.race([
     setTimeout(() => reject(new Error('Recovery timed out')), 2000)
   )
 ]).
+  then((response) => {
+    // Handle status-based responses from recovery
+    if (response && typeof response === 'object' && 'status' in response) {
+      if (response.status === "ERROR" && 'error' in response) {
+        // Throw technical errors
+        throw new Error(response.error)
+      } else if (response.status === "ERROR" && 'message' in response) {
+        // Log user-facing errors
+        console.error('Recovery error:', response.message)
+      } else if (response.status === "WARN" && 'message' in response) {
+        // Log warnings
+        console.warn('Recovery warning:', response.message)
+      } else if (response.status === "INFO" && 'message' in response) {
+        // Log info messages (not errors)
+        console.log('Recovery info:', response.message)
+      }
+    }
+  }).
   catch((error) => {
-    console.error(error)
+    // Only actual errors (timeout, network failures) end up here
+    console.error('Recovery failed:', error)
   }).
   finally(() => {
     // Load transcript tags from storage and migrate to new structure
@@ -265,10 +287,6 @@ function initializeMeetingFunctionality() {
     }
     document.removeEventListener('keydown', _toggleHandler)
     document.addEventListener('keydown', _toggleHandler)
-    /** @type {MutationObserver} */
-    let transcriptObserver
-    /** @type {MutationObserver} */
-    let chatMessagesObserver
 
     // Disconnect observers on tab close to prevent leaks
     window.addEventListener('beforeunload', () => {
@@ -298,33 +316,9 @@ function initializeMeetingFunctionality() {
         }
       })
 
-      // CRITICAL DOM DEPENDENCY. Grab the transcript element. This element is present, irrespective of captions ON/OFF, so this executes independent of operation mode.
-      let transcriptTargetNode = document.querySelector(`div[role="region"][tabindex="0"]`)
-      console.log("Aria-based transcript node found:", !!transcriptTargetNode)
-
-      // For old captions UI
-      if (!transcriptTargetNode) {
-        transcriptTargetNode = document.querySelector(".a4cQT")
-        canUseAriaBasedTranscriptSelector = false
-        console.log("Old captions UI transcript node found:", !!transcriptTargetNode)
-      }
-
-      if (transcriptTargetNode) {
-        console.log("Transcript target node found, setting up observer")
-        // Attempt to dim down the transcript
-        canUseAriaBasedTranscriptSelector
-          ? transcriptTargetNode.setAttribute("style", "opacity:0.2")
-          : transcriptTargetNode.children[1].setAttribute("style", "opacity:0.2")
-
-      // Create transcript observer instance linked to the callback function. Registered irrespective of operation mode, so that any visible transcript can be picked up during the meeting, independent of the operation mode.
-        transcriptObserver = new MutationObserver(transcriptMutationCallback)
-
-      // Start observing the transcript element and chat messages element for configured mutations
-      transcriptObserver.observe(transcriptTargetNode, mutationConfig)
-      }
-      else {
-        throw new Error("Transcript element not found in DOM")
-      }
+      // HYBRID APPROACH: Use document-level observer to wait for transcript container to appear
+      setupTranscriptContainerWatcher()
+      
     } catch (err) {
       console.error(err)
       isTranscriptDomErrorCaptured = true
@@ -339,32 +333,13 @@ function initializeMeetingFunctionality() {
       // Force open chat messages to make the required DOM to appear. Otherwise, the required chatMessages DOM element is not available.
       chatMessagesButton.click()
 
+      // HYBRID APPROACH: Use document-level observer to wait for chat container to appear
       // Allow DOM to be updated, close chat messages and then register chatMessage mutation observer
-      waitForElement(`div[aria-live="polite"].Ge9Kpc`).then(() => {
-        chatMessagesButton.click()
-        // CRITICAL DOM DEPENDENCY. Grab the chat messages element. This element is present, irrespective of chat ON/OFF, once it appears for this first time.
-        try {
-          const chatMessagesTargetNode = document.querySelector(`div[aria-live="polite"].Ge9Kpc`)
-
-          // Create chat messages observer instance linked to the callback function. Registered irrespective of operation mode.
-          if (chatMessagesTargetNode) {
-            chatMessagesObserver = new MutationObserver(chatMessagesMutationCallback)
-          chatMessagesObserver.observe(chatMessagesTargetNode, mutationConfig)
-          }
-          else {
-            throw new Error("Chat messages element not found in DOM")
-          }
-        } catch (err) {
-          console.error(err)
-          isChatMessagesDomErrorCaptured = true
-          showNotification({ 
-            status: 400, 
-            message: "<strong>TranscripTonic encountered an error</strong> <br /> Please check the console for details" 
-          })
-
-          logError("002", err)
-        }
-      })
+      setTimeout(() => {
+        chatMessagesButton.click() // Close chat
+        setupChatContainerWatcher()
+      }, 500)
+      
     } catch (err) {
       console.error(err)
       isChatMessagesDomErrorCaptured = true
@@ -666,6 +641,142 @@ function chatMessagesMutationCallback(mutationsList) {
       isChatMessagesDomErrorCaptured = true
     }
   })
+}
+
+//*********** HYBRID CONTAINER WATCHERS **********//
+/**
+ * Sets up a document-level observer to wait for transcript container to appear
+ */
+function setupTranscriptContainerWatcher() {
+  console.log("Setting up transcript container watcher...")
+  
+  /** @type {MutationObserver} */
+  let containerWatcher = new MutationObserver((mutations) => {
+    // Check for transcript container
+    let transcriptTargetNode = document.querySelector(`div[role="region"][tabindex="0"]`)
+    
+    // For old captions UI
+    if (!transcriptTargetNode) {
+      transcriptTargetNode = document.querySelector(".a4cQT")
+      canUseAriaBasedTranscriptSelector = false
+    }
+    
+    if (transcriptTargetNode) {
+      console.log("Transcript container appeared, setting up element-specific observer")
+      
+      // Determine which selector we're using
+      canUseAriaBasedTranscriptSelector = transcriptTargetNode.matches(`div[role="region"][tabindex="0"]`)
+      console.log("Using aria-based selector:", canUseAriaBasedTranscriptSelector)
+      
+      // Attempt to dim down the transcript
+      try {
+        canUseAriaBasedTranscriptSelector
+          ? transcriptTargetNode.setAttribute("style", "opacity:0.2")
+          : transcriptTargetNode.children[1].setAttribute("style", "opacity:0.2")
+      } catch (e) {
+        console.warn("Could not dim transcript:", e)
+      }
+
+      // Create transcript observer instance linked to the callback function
+      transcriptObserver = new MutationObserver(transcriptMutationCallback)
+      
+      // Start observing the transcript element for configured mutations
+      transcriptObserver.observe(transcriptTargetNode, mutationConfig)
+      
+      // Disconnect the container watcher since we found what we were looking for
+      containerWatcher.disconnect()
+      containerWatcher = null
+      
+      console.log("Transcript observer successfully attached to element")
+    }
+  })
+  
+  // Start watching the document for transcript container to appear
+  containerWatcher.observe(document.body, {
+    childList: true,
+    subtree: true
+  })
+  
+  // Also check immediately in case container already exists
+  setTimeout(() => {
+    if (containerWatcher) {
+      // Trigger a manual check
+      containerWatcher.takeRecords()
+      // Force a check by dispatching the logic manually
+      let transcriptTargetNode = document.querySelector(`div[role="region"][tabindex="0"]`)
+      if (!transcriptTargetNode) {
+        transcriptTargetNode = document.querySelector(".a4cQT")
+        canUseAriaBasedTranscriptSelector = false
+      }
+      
+      if (transcriptTargetNode) {
+        console.log("Transcript container found immediately")
+        canUseAriaBasedTranscriptSelector = transcriptTargetNode.matches(`div[role="region"][tabindex="0"]`)
+        
+        try {
+          canUseAriaBasedTranscriptSelector
+            ? transcriptTargetNode.setAttribute("style", "opacity:0.2")
+            : transcriptTargetNode.children[1].setAttribute("style", "opacity:0.2")
+        } catch (e) {
+          console.warn("Could not dim transcript:", e)
+        }
+
+        transcriptObserver = new MutationObserver(transcriptMutationCallback)
+        transcriptObserver.observe(transcriptTargetNode, mutationConfig)
+        containerWatcher.disconnect()
+        containerWatcher = null
+        console.log("Transcript observer attached immediately")
+      }
+    }
+  }, 100)
+}
+
+/**
+ * Sets up a document-level observer to wait for chat container to appear
+ */
+function setupChatContainerWatcher() {
+  console.log("Setting up chat container watcher...")
+  
+  /** @type {MutationObserver} */
+  let chatContainerWatcher = new MutationObserver((mutations) => {
+    const chatMessagesTargetNode = document.querySelector(`div[aria-live="polite"].Ge9Kpc`)
+    
+    if (chatMessagesTargetNode) {
+      console.log("Chat container appeared, setting up element-specific observer")
+      
+      // Create chat messages observer instance linked to the callback function
+      chatMessagesObserver = new MutationObserver(chatMessagesMutationCallback)
+      chatMessagesObserver.observe(chatMessagesTargetNode, mutationConfig)
+      
+      // Disconnect the container watcher since we found what we were looking for
+      chatContainerWatcher.disconnect()
+      chatContainerWatcher = null
+      
+      console.log("Chat observer successfully attached to element")
+    }
+  })
+  
+  // Start watching the document for chat container to appear
+  chatContainerWatcher.observe(document.body, {
+    childList: true,
+    subtree: true
+  })
+  
+  // Also check immediately in case container already exists
+  setTimeout(() => {
+    if (chatContainerWatcher) {
+      const chatMessagesTargetNode = document.querySelector(`div[aria-live="polite"].Ge9Kpc`)
+      
+      if (chatMessagesTargetNode) {
+        console.log("Chat container found immediately")
+        chatMessagesObserver = new MutationObserver(chatMessagesMutationCallback)
+        chatMessagesObserver.observe(chatMessagesTargetNode, mutationConfig)
+        chatContainerWatcher.disconnect()
+        chatContainerWatcher = null
+        console.log("Chat observer attached immediately")
+      }
+    }
+  }, 100)
 }
 
 
@@ -2356,6 +2467,14 @@ function recoverLastMeeting() {
       type: "recover_last_meeting",
     }
     chrome.runtime.sendMessage(message, function (responseUntyped) {
+      // Handle new status-based responses
+      if (responseUntyped && typeof responseUntyped === 'object' && 'status' in responseUntyped) {
+        // Return the status response object directly
+        resolve(responseUntyped)
+        return
+      }
+      
+      // Legacy response handling (fallback)
       const response = /** @type {ExtensionResponse} */ (responseUntyped)
       if (response.success) {
         resolve("Last meeting recovered successfully or recovery not needed")

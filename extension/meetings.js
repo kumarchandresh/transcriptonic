@@ -28,9 +28,40 @@ document.addEventListener("DOMContentLoaded", function () {
                 type: "recover_last_meeting",
             }
             chrome.runtime.sendMessage(message, function (responseUntyped) {
-                const response = /** @type {ExtensionResponse} */ (responseUntyped)
                 loadMeetings()
                 scrollTo({ top: 0, behavior: "smooth" })
+                
+                // Handle new status-based responses
+                if (responseUntyped && typeof responseUntyped === 'object' && 'status' in responseUntyped) {
+                    const statusResponse = responseUntyped
+                    
+                    if (statusResponse.status === "ERROR" && 'error' in statusResponse) {
+                        // Throw technical errors
+                        throw new Error(statusResponse.error)
+                    } else if (statusResponse.status === "ERROR" && 'message' in statusResponse) {
+                        // Log user-facing errors
+                        console.error(statusResponse.message)
+                        alert("Could not recover last meeting!")
+                    } else if (statusResponse.status === "WARN" && 'message' in statusResponse) {
+                        // Log warnings
+                        console.warn(statusResponse.message)
+                        alert("Nothing to recover—you're on top of the world!")
+                    } else if (statusResponse.status === "INFO" && 'message' in statusResponse) {
+                        // Handle info messages
+                        console.log(statusResponse.message)
+                        if (statusResponse.message === "No recovery needed" || 
+                            statusResponse.message === "Empty transcript and empty chatMessages" ||
+                            statusResponse.message === "No meetings found. May be attend one?") {
+                            alert("Nothing to recover—you're on top of the world!")
+                        } else {
+                            alert("Last meeting recovered successfully!")
+                        }
+                    }
+                    return
+                }
+                
+                // Legacy response handling (fallback for old format)
+                const response = /** @type {ExtensionResponse} */ (responseUntyped)
                 if (response.success) {
                     if (response.message === "No recovery needed") {
                         alert("Nothing to recover—you're on top of the world!")

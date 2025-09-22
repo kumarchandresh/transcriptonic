@@ -111,3 +111,32 @@
  * @property {boolean} success whether the message was processed successfully as per the request
  * @property {string} [message] message explaining success or failure
  */
+
+/**
+ * @typedef {Object} StatusResponseInfo Informational status response  
+ * @property {"INFO"} status status level
+ * @property {string} message informational message for logging
+ */
+
+/**
+ * @typedef {Object} StatusResponseWarn Warning status response
+ * @property {"WARN"} status status level  
+ * @property {string} message warning message for logging
+ */
+
+/**
+ * @typedef {Object} StatusResponseError Error status response with user message
+ * @property {"ERROR"} status status level
+ * @property {string} message user-facing error message for logging
+ */
+
+/**
+ * @typedef {Object} StatusResponseTechnicalError Technical error response to be thrown
+ * @property {"ERROR"} status status level
+ * @property {string} error technical error details to be thrown as exception
+ */
+
+/**
+ * @typedef {StatusResponseInfo | StatusResponseWarn | StatusResponseError | StatusResponseTechnicalError} StatusResponse
+ * Union type for all possible status responses with type-constrained logging levels
+ */
