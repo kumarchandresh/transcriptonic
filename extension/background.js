@@ -403,13 +403,44 @@ function postTranscriptToWebhook(index) {
                             }
                         }
 
+                        // Check if this is a Discord webhook and format accordingly
+                        let requestBody = webhookData
+                        if (resultSync.webhookUrl.includes('discord.com/api/webhooks/')) {
+                            // Format for Discord webhook
+                            const title = meeting.meetingTitle || meeting.title || "Google Meet Transcript"
+                            const startTime = new Date(meeting.meetingStartTimestamp).toLocaleString("default", timeFormat).toUpperCase()
+                            const endTime = new Date(meeting.meetingEndTimestamp).toLocaleString("default", timeFormat).toUpperCase()
+                            
+                            let content = `## 📝 ${title}\n`
+                            content += `**Start:** ${startTime}\n**End:** ${endTime}\n\n`
+                            
+                            if (webhookData.transcript && webhookData.transcript.length > 0) {
+                                content += `### 🎤 Transcript\n\`\`\`\n${webhookData.transcript}\n\`\`\`\n\n`
+                            }
+                            
+                            if (webhookData.chatMessages && webhookData.chatMessages.length > 0) {
+                                content += `### 💬 Chat Messages\n\`\`\`\n${webhookData.chatMessages}\n\`\`\``
+                            }
+                            
+                            // Discord has a 2000 character limit for content
+                            if (content.length > 2000) {
+                                content = content.substring(0, 1950) + "...\n*(Content truncated)*"
+                            }
+                            
+                            // Discord format
+                            requestBody = {
+                                username: "TranscripTonic",
+                                content: content
+                            }
+                        }
+
                         // Post to webhook
                         fetch(resultSync.webhookUrl, {
                             method: "POST",
                             headers: {
                                 "Content-Type": "application/json"
                             },
-                            body: JSON.stringify(webhookData)
+                            body: JSON.stringify(requestBody)
                         }).then(response => {
                             if (!response.ok) {
                                 throw new Error(`Webhook request failed with HTTP status code ${response.status} ${response.statusText}`)
