@@ -432,6 +432,27 @@ function postTranscriptToWebhook(index) {
                                 username: "TranscripTonic",
                                 content: content
                             }
+                        } else if (resultSync.webhookUrl.includes('chat.googleapis.com/v1/spaces/')) {
+                            // Format for Google Chat webhook
+                            const title = meeting.meetingTitle || meeting.title || "Google Meet Transcript"
+                            const startTime = new Date(meeting.meetingStartTimestamp).toLocaleString("default", timeFormat).toUpperCase()
+                            const endTime = new Date(meeting.meetingEndTimestamp).toLocaleString("default", timeFormat).toUpperCase()
+                            
+                            let text = `📝 *${title}*\n`
+                            text += `⏰ ${startTime} - ${endTime}\n\n`
+                            
+                            if (webhookData.transcript && webhookData.transcript.length > 0) {
+                                text += `🎤 *Transcript:*\n\`\`\`\n${webhookData.transcript}\n\`\`\`\n\n`
+                            }
+                            
+                            if (webhookData.chatMessages && webhookData.chatMessages.length > 0) {
+                                text += `💬 *Chat Messages:*\n\`\`\`\n${webhookData.chatMessages}\n\`\`\``
+                            }
+                            
+                            // Google Chat format
+                            requestBody = {
+                                text: text
+                            }
                         }
 
                         // Post to webhook
